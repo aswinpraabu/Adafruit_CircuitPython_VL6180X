@@ -29,13 +29,13 @@ Implementation Notes
 import struct
 import time
 
-from adafruit_bus_device import i2c_device
 from micropython import const
 
 try:
     from typing import List, Optional
 
-    from busio import I2C
+    #from busio import I2C
+    from machine import I2C
 except ImportError:
     pass
 
@@ -106,12 +106,17 @@ class VL6180X:
     """
 
     def __init__(self, i2c: I2C, address: int = _VL6180X_DEFAULT_I2C_ADDR, offset: int = 0) -> None:
-        self._device = i2c_device.I2CDevice(i2c, address)
+        self._device = i2c
+        self.i2c_addr = address
+
+        self.buf_8 = bytearray(1)
+        self.buf_16 = bytearray(2)
+
+        self.offset = offset
         if self._read_8(_VL6180X_REG_IDENTIFICATION_MODEL_ID) != 0xB4:
             raise RuntimeError("Could not find VL6180X, is it connected and powered?")
         self._load_settings()
         self._write_8(_VL6180X_REG_SYSTEM_FRESH_OUT_OF_RESET, 0x00)
-        self.offset = offset
 
         # Reset a sensor that crashed while in continuous mode
         if self.continuous_mode_enabled:
@@ -365,39 +370,29 @@ class VL6180X:
         self._write_8(0x0014, 0x24)  # Configures interrupt on 'New Sample
         # Ready threshold event'
 
-    def _write_8(self, address: int, data: int) -> None:
-        # Write 1 byte of data from the specified 16-bit register address.
-        with self._device:
-            self._device.write(bytes([(address >> 8) & 0xFF, address & 0xFF, data]))
+    def _write_8(self, reg, value):
+        self.buf_8[0] = value & 0xFF
+        self._device.writeto_mem(self.i2c_addr, reg, self.buf_8,addrsize=16)
+        #print(f"Wrote 0x{value & 0xFF:04X} to reg 0x{reg:04X}")
 
-    def _write_16(self, address: int, data: int) -> None:
-        # Write a 16-bit big endian value to the specified 16-bit register
-        # address.
-        with self._device as i2c:
-            i2c.write(
-                bytes(
-                    [
-                        (address >> 8) & 0xFF,
-                        address & 0xFF,
-                        (data >> 8) & 0xFF,
-                        data & 0xFF,
-                    ]
-                )
-            )
+    def _write_16(self, reg, value):
+        self.buf_16[0] = (value >> 8) & 0xFF
+        self.buf_16[1] = value & 0xFF
+        self._device.writeto_mem(self.i2c_addr, reg, self.buf_16,addrsize=16)
+        #print(f"Wrote 0x{value & 0xFFFF:04X} to reg 0x{reg:04X}")
 
-    def _read_8(self, address: int) -> int:
+    def _read_8(self, reg):
         # Read and return a byte from the specified 16-bit register address.
-        with self._device as i2c:
-            result = bytearray(1)
-            i2c.write(bytes([(address >> 8) & 0xFF, address & 0xFF]))
-            i2c.readinto(result)
-            return result[0]
-
-    def _read_16(self, address: int) -> int:
+        self._device.readfrom_mem_into(self.i2c_addr, reg & 0xFFFF, self.buf_8, addrsize=16)
+        value = self.buf_8[0]
+        return value
+    
+    def _read_16(self, reg):
         # Read and return a 16-bit unsigned big endian value read from the
         # specified 16-bit register address.
-        with self._device as i2c:
-            result = bytearray(2)
-            i2c.write(bytes([(address >> 8) & 0xFF, address & 0xFF]))
-            i2c.readinto(result)
-            return (result[0] << 8) | result[1]
+        self._device.readfrom_mem_into(self.i2c_addr, reg & 0xFFFF, self.buf_16, addrsize=16)
+        value = (self.buf_16[0] << 8) | (self.buf_16[1])
+        
+
+        return value
+
